@@ -1,81 +1,129 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, Header, Response, Request, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.security import HTTPBasic
-from pathlib import Path
-import mimetypes
-import logging
-import os
-from datetime import datetime
+from fastapi import FastAPI, File, UploadFile, HTTPException, Header, Response, Request, Form, Cookie                                           from fastapi.responses import HTMLResponse, RedirectResponse                                                                                    from fastapi.security import HTTPBasic                                                                                                          from pathlib import Path                                                                                                                        import mimetypes                                                                                                                                import logging                                                                                                                                  import os                                                                                                                                       from datetime import datetime, timedelta                                                                                                        import secrets                                                                                                                                  import hashlib                                                                                                                                                                                                                                                                                  app = FastAPI()                                                                                                                                                                                                                                                                                 # Configuration                                                                                                                                 class Config:                                                                                                                                       UPLOAD_DIR = Path("cdn_files")                                                                                                                  LOGS_DIR = Path("logs")                                                                                                                         MAX_FILE_SIZE = 512 * 1024 * 1024  # 512MB                                                                                                      ADMIN_PASSWORD = "ppp000ppp123Za@"                                                                                                              DAILY_UPLOAD_LIMIT = 1024 * 1024 * 1024  # 1GB per day                                                                                          SESSION_DURATION = timedelta(hours=24)  # Session length                                                                                    PUBLIC_IP = "cdn.kaityxd.xyz"                                                                                                                   # Create directories                                                                                                                            Config.UPLOAD_DIR.mkdir(exist_ok=True)                                                                                                          Config.LOGS_DIR.mkdir(exist_ok=True)                                                                                                                                                                                                                                                            # Setup logging                                                                                                                                 logging.basicConfig(                                                                                                                                filename=Config.LOGS_DIR / 'cdn.log',                                                                                                           level=logging.INFO,                                                                                                                             format='%(asctime)s - %(levelname)s - %(message)s'                                                                                          )                                                                                                                                                                                                                                                                                               # Session storage                                                                                                                               active_sessions = {}                                                                                                                                                                                                                                                                            def create_session_token():                                                                                                                         return secrets.token_urlsafe(32)                                                                                                                                                                                                                                                            def is_valid_session(session_token: str) -> bool:                                                                                                   if session_token not in active_sessions:                                                                                                            return False                                                                                                                                session_time = active_sessions[session_token]                                                                                                   if datetime.now() - session_time > Config.SESSION_DURATION:                                                                                         del active_sessions[session_token]                                                                                                              return False                                                                                                                                return True                                                                                                                                                                                                                                                                                 @app.get("/login", response_class=HTMLResponse)                                                                                                 async def login_page(request: Request):                                                                                                             # Check if already logged in                                                                                                                    admin_auth = request.cookies.get("admin_auth")                                                                                                  if admin_auth and is_valid_session(admin_auth):                                                                                                     return RedirectResponse(url="/admin", status_code=303)                                                                                                                                                                                                                                      html_content = """                                                                                                                              <html>                                                                                                                                          <head>                                                                                                                                              <title>Admin Login</title>                                                                                                                      <style>                                                                                                                                             body {                                                                                                                                              font-family: Arial, sans-serif;                                                                                                                 display: flex;                                                                                                                                  justify-content: center;                                                                                                                        align-items: center;                                                                                                                            height: 100vh;                                                                                                                                  margin: 0;                                                                                                                                      background: #f5f5f5;                                                                                                                        }                                                                                                                                               .login-container {                                                                                                                                  background: white;                                                                                                                              padding: 30px;                                                                                                                                  border-radius: 10px;                                                                                                                            box-shadow: 0 0 10px rgba(0,0,0,0.1);                                                                                                           width: 300px;                                                                                                                               }                                                                                                                                               h2 {                                                                                                                                                text-align: center;
+                color: #333;
+                margin-bottom: 20px;
+            }
+            .form-group {
+                margin-bottom: 15px;
+            }
+            input[type="password"] {
+                width: 100%;
+                padding: 10px;
+                border: 1px solid #ddd;
+                border-radius: 5px;
+                box-sizing: border-box;
+            }
+            button {
+                width: 100%;
+                padding: 10px;
+                background: #4CAF50;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                cursor: pointer;
+                font-size: 16px;
+            }
+            button:hover {
+                background: #45a049;
+            }
+            .error {
+                color: red;
+                text-align: center;
+                margin-bottom: 10px;
+                display: none;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="login-container">
+            <h2>Admin Login</h2>
+            <form action="/login" method="post">
+                <div class="form-group">
+                    <input type="password" name="password" placeholder="Enter admin password" required>
+                </div>
+                <div class="error" id="error-message">Invalid password</div>
+                <button type="submit">Login</button>
+            </form>
+        </div>
+        <script>
+            // Show error message if redirected with error
+            if (window.location.search.includes('error=1')) {
+                document.getElementById('error-message').style.display = 'block';
+            }
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
 
-app = FastAPI()
+@app.post("/login")
+async def login(password: str = Form(...)):
+    if password == Config.ADMIN_PASSWORD:
+        session_token = create_session_token()
+        active_sessions[session_token] = datetime.now()
+        response = RedirectResponse(url="/admin", status_code=303)
+        response.set_cookie(
+            key="admin_auth",
+            value=session_token,
+            httponly=True,
+            secure=True,  # Only send over HTTPS
+            samesite="strict",  # Protect against CSRF
+            max_age=int(Config.SESSION_DURATION.total_seconds())
+        )
+        return response
+    return RedirectResponse(url="/login?error=1", status_code=303)
 
-# Configuration
-class Config:
-    UPLOAD_DIR = Path("cdn_files")
-    LOGS_DIR = Path("logs")
-    MAX_FILE_SIZE = 512 * 1024 * 1024  # 512MB
-    ADMIN_PASSWORD = "ppp000ppp123Za@"
-    DAILY_UPLOAD_LIMIT = 1024 * 1024 * 1024  # 1GB per day
-
-# Create directories
-Config.UPLOAD_DIR.mkdir(exist_ok=True)
-Config.LOGS_DIR.mkdir(exist_ok=True)
-
-# Setup logging
-logging.basicConfig(
-    filename=Config.LOGS_DIR / 'cdn.log',
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-
-def get_public_ip():
-    return "cdn.kaityxd.xyz"
-
-PUBLIC_IP = get_public_ip()
+@app.get("/logout")
+async def logout(admin_auth: str = Cookie(None)):
+    if admin_auth in active_sessions:
+        del active_sessions[admin_auth]
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie("admin_auth")
+    return response
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_panel(request: Request):
     admin_auth = request.cookies.get("admin_auth")
-    if not admin_auth:
+    if not admin_auth or not is_valid_session(admin_auth):
         return RedirectResponse(url="/login", status_code=303)
 
     files = list(Config.UPLOAD_DIR.iterdir())
     total_size = sum(f.stat().st_size for f in files)
 
+    # Rest of your existing admin panel HTML code remains the same
     html_content = """
     <html>
     <head>
         <title>Admin Panel</title>
         <style>
-            body { 
-                font-family: Arial, sans-serif; 
-                padding: 20px; 
-                background: #f5f5f5; 
+            body {
+                font-family: Arial, sans-serif;
+                padding: 20px;
+                background: #f5f5f5;
             }
-            .container { 
-                max-width: 800px; 
-                margin: auto; 
+            .container {
+                max-width: 800px;
+                margin: auto;
                 background: white;
                 padding: 20px;
                 border-radius: 10px;
                 box-shadow: 0 0 10px rgba(0,0,0,0.1);
             }
-            table { 
-                width: 100%; 
-                border-collapse: collapse; 
+            table {
+                width: 100%;
+                border-collapse: collapse;
             }
-            th, td { 
-                padding: 10px; 
-                text-align: left; 
-                border-bottom: 1px solid #ddd; 
+            th, td {
+                padding: 10px;
+                text-align: left;
+                border-bottom: 1px solid #ddd;
             }
-            .delete-btn { 
-                background: #ff4444; 
-                color: white; 
-                padding: 5px 10px; 
-                border: none; 
-                border-radius: 3px; 
-                cursor: pointer; 
+            .delete-btn {
+                background: #ff4444;
+                color: white;
+                padding: 5px 10px;
+                border: none;
+                border-radius: 3px;
+                cursor: pointer;
             }
             .filename {
                 max-width: 200px;
@@ -93,15 +141,27 @@ async def admin_panel(request: Request):
                 cursor: pointer;
                 text-decoration: none;
             }
+            .refresh-btn {
+                float: right;
+                background: #4CAF50;
+                color: white;
+                padding: 5px 15px;
+                border: none;
+                border-radius: 3px;
+                cursor: pointer;
+                text-decoration: none;
+                margin-right: 10px;
+            }
         </style>
     </head>
     <body>
         <div class="container">
             <a href="/logout" class="logout-btn">Logout</a>
+            <a href="/admin" class="refresh-btn">Refresh</a>
             <h2>Admin Panel</h2>
             <p>Total Files: """ + str(len(files)) + """</p>
             <p>Total Storage Used: """ + f"{total_size / (1024*1024):.2f}" + """ MB</p>
-            
+
             <h3>Files</h3>
             <table>
                 <tr>
@@ -143,21 +203,19 @@ async def admin_panel(request: Request):
     """
     return HTMLResponse(content=html_content)
 
-# Add logout route
-@app.get("/logout")
-async def logout():
-    response = RedirectResponse(url="/login", status_code=303)
-    response.delete_cookie("admin_auth")
-    return response
+@app.delete("/admin/delete/{filename}")
+async def delete_file(filename: str, request: Request):
+    admin_auth = request.cookies.get("admin_auth")
+    if not admin_auth or not is_valid_session(admin_auth):
+        raise HTTPException(status_code=403, detail="Unauthorized")
 
+    file_path = Config.UPLOAD_DIR / filename
+    if file_path.exists():
+        os.remove(file_path)
+        logging.info(f"File deleted: {filename}")
+        return {"status": "success"}
+    raise HTTPException(status_code=404, detail="File not found")
 
-@app.post("/login")
-async def login(password: str = Form(...)):
-    if password == Config.ADMIN_PASSWORD:
-        response = RedirectResponse(url="/admin", status_code=303)
-        response.set_cookie(key="admin_auth", value="true", httponly=True)
-        return response
-    return RedirectResponse(url="/login", status_code=303)
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
@@ -200,7 +258,7 @@ async def library(
 ):
     # Get all files and apply sorting
     files = list(Config.UPLOAD_DIR.iterdir())
-    
+
     # Sorting logic
     if sort_by == "date":
         files.sort(key=lambda x: x.stat().st_mtime, reverse=(order == "desc"))
@@ -213,7 +271,7 @@ async def library(
     total_files = len(files)
     total_pages = max(1, (total_files + limit - 1) // limit)
     page = min(max(1, page), total_pages)
-    
+
     start_idx = (page - 1) * limit
     end_idx = start_idx + limit
     files_page = files[start_idx:end_idx]
@@ -272,11 +330,11 @@ async def library(
     <head>
         <title>CDN Library</title>
         <style>
-            body {{ 
-                font-family: Arial, sans-serif; 
-                text-align: center; 
-                padding: 20px; 
-                background: #f5f5f5; 
+            body {{
+                font-family: Arial, sans-serif;
+                text-align: center;
+                padding: 20px;
+                background: #f5f5f5;
                 margin: 0;
             }}
             .container {{
@@ -300,15 +358,15 @@ async def library(
                 border-radius: 5px;
                 margin-right: 10px;
             }}
-            .grid {{ 
-                display: grid; 
+            .grid {{
+                display: grid;
                 grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-                gap: 20px; 
+                gap: 20px;
                 margin-bottom: 20px;
             }}
-            .card {{ 
-                background: white; 
-                border-radius: 10px; 
+            .card {{
+                background: white;
+                border-radius: 10px;
                 box-shadow: 0 2px 5px rgba(0,0,0,0.1);
                 overflow: hidden;
                 transition: transform 0.2s;
@@ -316,15 +374,15 @@ async def library(
             .card:hover {{
                 transform: translateY(-5px);
             }}
-            .card img, .card video {{ 
-                width: 100%; 
+            .card img, .card video {{
+                width: 100%;
                 height: 200px;
                 object-fit: cover;
             }}
             .card-info {{
                 padding: 10px;
             }}
-            .card p {{ 
+            .card p {{
                 margin: 0;
                 font-weight: bold;
                 color: #333;
@@ -395,7 +453,7 @@ async def library(
                     Total Files: {total_files}
                 </div>
             </div>
-            
+
             <div class="grid">
                 {file_cards}
             </div>
